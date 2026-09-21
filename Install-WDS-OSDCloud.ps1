@@ -23,7 +23,7 @@
     Windows 11 feature update version, e.g. 25H2.
 
 .PARAMETER WindowsLanguage
-    One or more language tags to build boot images for, e.g. da-dk, en-us.
+    One or more language tags to build boot images for, e.g. en-us.
 
 .PARAMETER WindowsEdition
     Windows edition to deploy. Default is Pro.
@@ -46,7 +46,7 @@
     Path to the log file written by Write-Log. Default is C:\Temp\Install-WDS-OSDCloud.log.
 
 .EXAMPLE
-    .\Install-WDS-OSDCloud.ps1 -WindowsVersion 25H2 -WindowsLanguage da-dk,en-us
+    .\Install-WDS-OSDCloud.ps1 -WindowsVersion 25H2 -WindowsLanguage en-us
 
     Runs with the default StandAlone WDS mode.
 
@@ -75,7 +75,7 @@ param (
     [string]$WindowsVersion = "25H2",
 
     [Parameter()]
-    [string[]]$WindowsLanguage = @("da-dk", "en-us"),
+    [string[]]$WindowsLanguage = @("en-us"),
 
     [Parameter()]
     [ValidateSet("Home", "Pro", "Enterprise", "Education")]
