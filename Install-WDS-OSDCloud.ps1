@@ -5,25 +5,47 @@
 .SYNOPSIS
     Installs and configures Windows Deployment Services with OSDCloud WinPE boot images.
 
+.VERSION
+    1.1.0
+
+.RELEASENOTES
+    1.1.0
+    - Default WindowsLanguage changed to en-us; the Language and OSLanguage parameters are
+      now omitted from the underlying OSDCloud commands when en-us is used
+    - ADK components now install under -Configure WDS/Both instead of -Configure OSDCloud
+    - Added Test-AdkPresence pre-flight check so -Configure OSDCloud fails fast with a clear
+      error when the ADK Deployment Tools or WinPE add-on are not already present
+
+    1.0.0
+    - Initial versioned release: Configure parameter (Both/WDS/OSDCloud) to include/exclude
+      WDS and OSDCloud configuration, WDSMode parameter defaulting to StandAlone, Write-Log
+      function replacing transcript-based logging, and ImportToWds gating of the WDS boot
+      image import
+
 .DESCRIPTION
-    Installs the WDS role, configures it as standalone or domain-joined, downloads and
-    installs the Windows ADK and WinPE add-on, installs the OSD PowerShell module, then
-    builds an OSDCloud template and workspace per requested Windows language and imports
-    the resulting WinPE boot image into WDS. The WDS and OSDCloud portions can each be
-    included or excluded independently via the Configure parameter. All actions are
+    Installs the WDS role, configures it as standalone or domain-joined, and downloads and
+    installs the Windows ADK and WinPE add-on, then installs the OSD PowerShell module and
+    builds an OSDCloud template and workspace per requested Windows language, importing the
+    resulting WinPE boot image into WDS. The WDS (plus ADK) and OSDCloud portions can each
+    be included or excluded independently via the Configure parameter. All actions are
     written to a log file via Write-Log instead of a transcript.
 
 .PARAMETER Configure
-    Which parts of the script to run. Both (default) installs and configures WDS and
-    builds/imports the OSDCloud boot images. WDS only installs and configures the WDS
-    role without touching ADK or OSDCloud. OSDCloud only builds the OSDCloud template,
-    workspace and boot image without touching WDS, and skips the WDS boot image import.
+    Which parts of the script to run. Both (default) installs and configures WDS, installs
+    the ADK components, and builds/imports the OSDCloud boot images. WDS installs and
+    configures the WDS role and the ADK components, without touching OSDCloud. OSDCloud
+    builds the OSDCloud template, workspace and boot image only — it does not install the
+    ADK components and does not touch WDS, so the boot image is not imported. Since OSDCloud
+    does not install the ADK, it runs a pre-flight check for the ADK Deployment Tools and
+    WinPE add-on and throws a clear error if either is missing.
 
 .PARAMETER WindowsVersion
     Windows 11 feature update version, e.g. 25H2.
 
 .PARAMETER WindowsLanguage
-    One or more language tags to build boot images for, e.g. en-us.
+    One or more language tags to build boot images for, e.g. da-dk, en-us. Default is
+    en-us. When en-us is used, the Language and OSLanguage parameters are omitted from
+    the underlying OSDCloud commands rather than being passed explicitly.
 
 .PARAMETER WindowsEdition
     Windows edition to deploy. Default is Pro.
@@ -46,23 +68,28 @@
     Path to the log file written by Write-Log. Default is C:\Temp\Install-WDS-OSDCloud.log.
 
 .EXAMPLE
-    .\Install-WDS-OSDCloud.ps1 -WindowsVersion 25H2 -WindowsLanguage en-us
+    .\Install-WDS-OSDCloud.ps1 -WindowsVersion 25H2 -WindowsLanguage da-dk,en-us
 
     Runs with the default StandAlone WDS mode.
 
 .EXAMPLE
     .\Install-WDS-OSDCloud.ps1 -Configure WDS -WDSMode Domain
 
-    Installs and configures WDS only, joined to an Active Directory domain, skipping ADK and OSDCloud.
+    Installs and configures WDS plus the ADK components, joined to an Active Directory
+    domain, skipping OSDCloud.
 
 .EXAMPLE
     .\Install-WDS-OSDCloud.ps1 -Configure OSDCloud -WindowsLanguage en-us
 
-    Builds the OSDCloud template, workspace and boot image only, without touching WDS
-    and without importing the boot image into WDS.
+    Builds the OSDCloud template, workspace and boot image only, without installing the
+    ADK components or touching WDS, and without importing the boot image into WDS.
 
 .NOTES
     Kasper Johansen | kasperjohansen.net
+
+.TODO
+    - Multi language support
+    - WiFi support
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
@@ -216,6 +243,20 @@ function Install-ADKComponents {
     }
 }
 
+function Test-AdkPresence {
+    [CmdletBinding()]
+    param ()
+
+    $deploymentToolsPath = "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools"
+    $winPEPath = "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment"
+
+    Write-Log -Message "Checking for existing ADK Deployment Tools and WinPE add-on"
+
+    if (!(Test-Path -Path $deploymentToolsPath) -or !(Test-Path -Path $winPEPath)) {
+        throw "ADK Deployment Tools and/or the WinPE add-on were not found on this machine. Run this script with -Configure WDS or -Configure Both first to install them, or install the ADK manually before using -Configure OSDCloud."
+    }
+}
+
 function Install-OSDCloudModule {
     [CmdletBinding()]
     param ()
@@ -255,8 +296,14 @@ function New-OSDCloudDeployment {
             Write-Log -Message "OSDCloud template already exists" -Level Warning
         }
         else {
-            Write-Log -Message "Creating OSDCloud template for $Language"
-            New-OSDCloudTemplate -Language $Language -SetInputLocale $Language
+            if ($Language -eq "en-us") {
+                Write-Log -Message "Creating OSDCloud template (default en-us)"
+                New-OSDCloudTemplate
+            }
+            else {
+                Write-Log -Message "Creating OSDCloud template for $Language"
+                New-OSDCloudTemplate -Language $Language -SetInputLocale $Language
+            }
         }
 
         if (!(Test-Path -Path $RootDir)) {
@@ -272,7 +319,12 @@ function New-OSDCloudDeployment {
         Set-OSDCloudWorkspace -WorkspacePath $workspaceDir
 
         Write-Log -Message "Building OSDCloud WinPE boot image for $Language"
-        $startOSDCloud = "-OSName '$osName' -OSLanguage `"$Language`" -OSEdition $Edition -OSActivation Retail -Zti -Restart"
+        if ($Language -eq "en-us") {
+            $startOSDCloud = "-OSName '$osName' -OSEdition $Edition -OSActivation Retail -Zti -Restart"
+        }
+        else {
+            $startOSDCloud = "-OSName '$osName' -OSLanguage `"$Language`" -OSEdition $Edition -OSActivation Retail -Zti -Restart"
+        }
         if ($Driver -eq "None") {
             Edit-OSDCloudWinPE -StartOSDCloud $startOSDCloud
         }
@@ -312,13 +364,17 @@ try {
     if ($includeWDS) {
         Install-WDSRole
         Set-WDSConfiguration -Mode $WDSMode -AnswerClients $WDSAnswerClients
+        Install-ADKComponents -AdkUrl $ADKSourceURL -WinPEUrl $WinPESourceURL -AdkPath $ADKInstaller -WinPEPath $WinPEInstaller
     }
     else {
-        Write-Log -Message "Skipping WDS role installation and configuration (Configure = $Configure)" -Level Warning
+        Write-Log -Message "Skipping WDS role installation, configuration and ADK components (Configure = $Configure)" -Level Warning
     }
 
     if ($includeOSDCloud) {
-        Install-ADKComponents -AdkUrl $ADKSourceURL -WinPEUrl $WinPESourceURL -AdkPath $ADKInstaller -WinPEPath $WinPEInstaller
+        if (!$includeWDS) {
+            Test-AdkPresence
+        }
+
         Install-OSDCloudModule
 
         foreach ($language in $WindowsLanguage) {
@@ -326,7 +382,7 @@ try {
         }
     }
     else {
-        Write-Log -Message "Skipping ADK and OSDCloud configuration (Configure = $Configure)" -Level Warning
+        Write-Log -Message "Skipping OSDCloud configuration (Configure = $Configure)" -Level Warning
     }
 
     Write-Log -Message "Deployment completed successfully (Configure = $Configure)" -Level Success
